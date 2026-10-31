@@ -62,7 +62,7 @@ let buildPromise = null;
 /** This build's identity: the SHA-256 of gta2.wasm (the snapshot's memory layout depends on it). */
 function buildId() {
   if (!buildPromise) {
-    buildPromise = fetch(new URL('gta2.wasm?v=5a148f500b', import.meta.url))
+    buildPromise = fetch(new URL('gta2.wasm?v=1256913706', import.meta.url))
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`gta2.wasm: HTTP ${r.status}`))))
       .then((buf) => crypto.subtle.digest('SHA-256', buf))
       .then((d) => Array.from(new Uint8Array(d).slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join(''))

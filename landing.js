@@ -2,8 +2,8 @@
 // friends, the controls on a drawn keyboard, options and help. Layout in the
 // spirit of browser-game launchers such as Eaglercraft's; our own code and style.
 
-import { LOAD_KEY, SAVE_KEY } from './savestate.js?v=5a148f500b';
-import { findPad, listPads, padName } from './gamepad.js?v=5a148f500b';
+import { LOAD_KEY, SAVE_KEY } from './savestate.js?v=1256913706';
+import { findPad, listPads, padName } from './gamepad.js?v=1256913706';
 
 // What each key does, by group (colour). Matches PORT_CONTROLS in shell.js
 // and the shell's own keys (map, scoreboard, view distance).

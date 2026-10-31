@@ -118,6 +118,7 @@
 "/home/gtamp/gta2-browser-main/build/port/release/obj/platform/net_web.o"
 "/home/gtamp/gta2-browser-main/build/port/release/obj/platform/options_web.o"
 "/home/gtamp/gta2-browser-main/build/port/release/obj/platform/puppet_web.o"
+"/home/gtamp/gta2-browser-main/build/port/release/obj/platform/rollback_web.o"
 "/home/gtamp/gta2-browser-main/build/port/release/obj/platform/savestate_web.o"
 "/home/gtamp/gta2-browser-main/build/port/release/obj/platform/win32_shim.o"
 "/home/gtamp/gta2-browser-main/build/port/release/obj/render/exports.o"

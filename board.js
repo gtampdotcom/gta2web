@@ -2,7 +2,7 @@
 // setting up connections between players (WebRTC signalling) go through it instead of public
 // trackers or brokers. Browsers poll it; nothing stays on it for more than a minute.
 
-import { createTopicStrategy, selfId } from './vendor/trystero/core/index.mjs?v=5a148f500b';
+import { createTopicStrategy, selfId } from './vendor/trystero/core/index.mjs?v=1256913706';
 
 const URL_ = 'board.php';
 const POLL_MS = 1000;

@@ -26,6 +26,8 @@
 
 // The original's multiplayer setups for the three story districts (data/*.mmp).
 // (no prototype: a map name sent by another player, like "constructor", must not find anything)
+import { BUNDLE, MatchClock } from './clock.js?v=1256913706';
+
 export const DISTRICTS = Object.assign(Object.create(null), {
   // (the original's scripts start at 2 players; one player alone uses the 2-player script)
   // (author: the lobby's map search; the original game's maps are DMA Design's)
@@ -240,9 +242,9 @@ export class WebRtcTransport {
    */
   static async create(room) {
     // (whole import('...') calls: the release build versions their addresses, see version_urls in scripts/build_pages.py)
-    const board = await import('./board.js?v=5a148f500b');
+    const board = await import('./board.js?v=1256913706');
     const onBoard = await board.boardAvailable();
-    const { joinRoom, selfId } = onBoard ? board : await import('./vendor/trystero/torrent.mjs?v=5a148f500b');
+    const { joinRoom, selfId } = onBoard ? board : await import('./vendor/trystero/torrent.mjs?v=1256913706');
     // relays for players who cannot connect directly (web/turn.php, where the site runs PHP)
     const turn = onBoard ? await turnServers() : [];
     return new WebRtcTransport(joinRoom, selfId, room, onBoard ? board.boardActivity : null, turn);
@@ -303,7 +305,7 @@ export class RoomDirectory {
   /** @param {boolean} local this browser's tabs only (?local), like LocalTransport */
   static async create(local) {
     if (local) return new RoomDirectory(new LocalTransport(DIRECTORY));
-    const { BoardDirectory, boardAvailable } = await import('./board.js?v=5a148f500b');
+    const { BoardDirectory, boardAvailable } = await import('./board.js?v=1256913706');
     return await boardAvailable() ? new BoardDirectory(cleanRoom) : new MqttDirectory(BROKERS);
   }
 
@@ -642,6 +644,15 @@ export class CoopLobby {
     this.onGhost = () => {};    // (slot, [x, y, z, rotation, sprite type, number, palette, remap] | null)
     this.stats = { sent: 0, received: 0, early: 0 }; // game messages
     this.early = [];
+    this.earlyBundles = [];
+    // the match clock (pacing 'clock', web/clock.js): the host's page runs it; bundles go to the
+    // core in tick order (onBundle)
+    this.clock = null;
+    this.clockId = null;
+    this.nextTick = 0;
+    this.onBundle = () => {};
+    this.onLag = () => {};       // (late: made-up inputs per slot in the last 2 s)
+    this.onClockLost = () => {}; // the host left: the match is over
     this.trace = [];
     this.settings = {
       mode: 'ffa', district: 'rocket', pacing: 'lockstep', lighting: 'noon', public: false, police: false, friendlyFire: false, minutes: 0, killLimit: 10, pointsTarget: 0, sides: {},
@@ -656,6 +667,13 @@ export class CoopLobby {
   }
 
   message(from, data) {
+    if ((data instanceof Uint8Array || data instanceof ArrayBuffer) && this.clockMode) {
+      if (this.gone.has(from)) return;
+      const bytes = new Uint8Array(data);
+      if (from === this.clockId && bytes[0] === BUNDLE) this.bundle(bytes);
+      else if (this.clock && this.slots && from in this.slots) this.clock.input(this.slots[from], bytes);
+      return;
+    }
     if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
       if (!this.slots || !(from in this.slots)) return;
       const bytes = new Uint8Array(data);
@@ -705,6 +723,10 @@ export class CoopLobby {
       this.onChat(this.slots[from], data.text.slice(0, 160));
     } else if (data.lobby === 'sync' && this.slots && from in this.slots && Number.isInteger(data.tick)) {
       this.onSync(this.slots[from], data.tick, String(data.h));
+    } else if (data.lobby === 'lag' && from === this.clockId && Array.isArray(data.late)) {
+      this.onLag(data.late.map(Number));
+    } else if (data.lobby === 'leave' && this.clock && this.slots && from in this.slots) {
+      this.clock.leave(this.slots[from]);
     } else if (data.lobby === 'wp' && this.slots && from in this.slots) {
       const wp = data.wp && Number.isFinite(data.wp.x) && Number.isFinite(data.wp.y) ? { x: data.wp.x, y: data.wp.y } : null;
       this.onWaypoint(this.slots[from], wp);
@@ -799,6 +821,14 @@ export class CoopLobby {
   }
 
   left(id) {
+    if (this.slots && id in this.slots && this.clockMode) {
+      // the clock drops a player at the same tick in every game; the host's leaving ends it
+      this.gone.add(id);
+      if (this.clock) this.clock.leave(this.slots[id]);
+      if (id === this.hostId) this.clockGone();
+      this.checkLoaded();
+      return;
+    }
     if (this.slots && id in this.slots) {
       this.onPlayerLeft(this.slots[id]);
       this.gone.add(id);
@@ -826,6 +856,8 @@ export class CoopLobby {
     const s = this.settings;
     const match = {
       ...s, id: `${randomId()}${Date.now().toString(36)}`, players: this.players, delay: (s.pacing === 'host' ? hostPacedDelayFor : inputDelayFor)(slowest),
+      // ?predict=0 on the host's page: the clock without prediction (web/rollback.js)
+      clock: s.pacing === 'clock', predict: s.pacing === 'clock' && new URLSearchParams(location.search).get('predict') !== '0',
       crews: s.mode === 'wars' ? this.crews() : [],
     };
     for (const p of this.players) if (p.id !== this.t.id) this.t.send(p.id, { lobby: 'start', match });
@@ -869,6 +901,8 @@ export class CoopLobby {
     this.players = match.players;
     this.slots = Object.fromEntries(match.players.map((p, i) => [p.id, i]));
     this.mySlot = this.slots[this.t.id];
+    this.clockMode = !!match.clock;
+    if (this.clockMode) this.clockId = this.host ? this.t.id : this.hostId;
     this.onStart({ ...match, mySlot: this.mySlot, delay: match.delay || 1 });
   }
 
@@ -887,8 +921,65 @@ export class CoopLobby {
   checkLoaded() {
     if (!this.host || !this.slots || !this.loaded.has(this.t.id)) return;
     if (!this.players.every((p) => this.loaded.has(p.id) || this.gone.has(p.id))) return;
+    if (this.goSent) return; // once: a second clock would start the match's ticks over
+    this.goSent = true;
+    if (this.clockMode) this.startClock();
     for (const p of this.players) if (p.id !== this.t.id && !this.gone.has(p.id)) this.t.send(p.id, { lobby: 'go' });
     this.go();
+  }
+
+  /**
+   * Host: the match clock starts as everyone enters the match, on a worker's timer (a hidden tab's
+   * own timers slow down). Every 2 s it tells everyone whose inputs it had to make up (lag).
+   */
+  startClock() {
+    const ids = this.players.map((p) => p.id);
+    this.clock = new MatchClock({
+      players: ids.length,
+      send: (bytes) => {
+        for (const id of ids) if (id !== this.t.id && !this.gone.has(id)) this.t.send(id, bytes);
+        this.bundle(bytes);
+      },
+    });
+    for (const id of ids) if (this.gone.has(id)) this.clock.leave(this.slots[id]);
+    const timer = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),4);'], { type: 'text/javascript' })));
+    let late = this.clock.stats().map((s) => s.late);
+    let lagAt = performance.now();
+    timer.onmessage = () => {
+      this.clock.poll();
+      if (performance.now() - lagAt >= 2000) {
+        lagAt = performance.now();
+        const now = this.clock.stats().map((s) => s.late);
+        const msg = { lobby: 'lag', late: now.map((n, i) => n - late[i]) };
+        late = now;
+        for (const id of ids) if (id !== this.t.id && !this.gone.has(id)) this.t.send(id, msg);
+        this.onLag(msg.late);
+      }
+      if (this.clock.done) timer.terminate();
+    };
+  }
+
+  /** A bundle from the clock: to the core, in tick order (the transports keep the order). */
+  bundle(bytes) {
+    const tick = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(1, true);
+    if (tick !== this.nextTick) return;
+    this.nextTick++;
+    this.stats.received++;
+    if (!this.ready) { this.earlyBundles.push(bytes); return; }
+    this.onBundle(bytes);
+  }
+
+  /** The clock is gone for good (said once). */
+  clockGone() {
+    if (this.clockLost) return;
+    this.clockLost = true;
+    this.onClockLost();
+  }
+
+  /** This player leaves the match (the game is over for them): the clock drops them now. */
+  leaveMatch() {
+    if (!this.started || !this.clockMode) return;
+    if (this.host) { if (this.clock) this.clock.leave(this.mySlot); } else this.t.send(this.hostId, { lobby: 'leave' });
   }
 
   /** The last game messages in and out, for diagnosing (window.gta2.coop.lobby.trace). */
@@ -901,6 +992,7 @@ export class CoopLobby {
   gameReady() {
     this.ready = true;
     for (const [slot, bytes] of this.early.splice(0)) { this.stats.received++; this.onGameMessage(slot, bytes); }
+    for (const bytes of this.earlyBundles.splice(0)) this.onBundle(bytes);
   }
 
   /** Ghost races: where this player is now, for everyone else's ghosts (or null: not on the map). */
@@ -931,6 +1023,13 @@ export class CoopLobby {
   /** Game messages from the core: to one slot, or -1 for everyone. */
   sendGame(slot, bytes) {
     this.log('out', slot, bytes);
+    if (this.clockMode) {
+      // the clock takes inputs only; this game's own come back in its bundles
+      if (this.clock) this.clock.input(this.mySlot, bytes);
+      else this.t.send(this.clockId, bytes);
+      this.stats.sent++;
+      return;
+    }
     for (const [id, s] of Object.entries(this.slots)) {
       if (s === this.mySlot || (slot >= 0 && s !== slot)) continue;
       this.t.send(id, bytes);

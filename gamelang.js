@@ -6,8 +6,8 @@
 // file here: it is made from data/e.gxt with the fan translation of the menus, HUD and messages
 // (web/gxt-translations.js, web/gxtgen.js, both from the upstream GTA2 in the browser), so its
 // mission text stays in English.
-import { GAME_TRANSLATIONS } from './gxt-translations.js?v=5a148f500b';
-import { buildGxt, parseGxt, translateGxt } from './gxtgen.js?v=5a148f500b';
+import { GAME_TRANSLATIONS } from './gxt-translations.js?v=1256913706';
+import { buildGxt, parseGxt, translateGxt } from './gxtgen.js?v=1256913706';
 
 export const LANG_KEY = 'gta2-port-lang';
 export const LANGS = { en: 'English', es: 'Español', fr: 'Français' };

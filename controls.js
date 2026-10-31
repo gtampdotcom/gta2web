@@ -4,7 +4,7 @@
 // again at once, and the shell keeps them in this browser with the other settings.
 //
 // The controller's buttons are in a second column (web/gamepad.js keeps them in this browser).
-import { bindableButton, buttonLabel, padBindings, resetPadBindings, setPadBinding } from './gamepad.js?v=5a148f500b';
+import { bindableButton, buttonLabel, padBindings, resetPadBindings, setPadBinding } from './gamepad.js?v=1256913706';
 
 // The game's control slots, in its order (hklm\...\gta2\control\0-11).
 const ACTIONS = [

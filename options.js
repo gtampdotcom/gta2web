@@ -1,9 +1,11 @@
 // The Options screen: the settings the toolbar has no button for (language, screen shape, HUD,
 // motion). Opened from the lobby and from the toolbar (or the touch menu) while playing. Kept in
 // this browser; the shell applies a change at once when it can (onChange).
-import { LANG_KEY, LANGS } from './gamelang.js?v=5a148f500b';
+import { LANG_KEY, LANGS } from './gamelang.js?v=1256913706';
+import { DEFAULT_EFFECTS_VOLUME, EFFECTS_VOLUME_KEY } from './audio.js?v=1256913706';
 
 export const OPTIONS = [
+  { key: EFFECTS_VOLUME_KEY, label: 'Volume', hint: 'Sound effects, speech and the car radio.', range: [0, 10], fallback: String(DEFAULT_EFFECTS_VOLUME) },
   { key: LANG_KEY, label: 'Game language',
     hint: 'Español is the original translation. Français covers menus and messages; missions stay in English. Used from the next game.',
     choices: Object.entries(LANGS), fallback: 'en' },
@@ -74,6 +76,20 @@ export class OptionsScreen {
     const list = el('div', { class: 'options-list' });
     for (const o of OPTIONS) {
       const current = read(o.key) ?? o.fallback;
+      if (o.range) {
+        const value = el('output', {}, current);
+        const slider = el('input', {
+          type: 'range', min: o.range[0], max: o.range[1], step: 1, value: current, 'aria-label': o.label,
+          oninput: () => {
+            value.textContent = slider.value;
+            write(o.key, slider.value);
+            this.onChange(o.key, slider.value);
+          },
+        });
+        list.append(el('div', { class: 'opt' }, el('div', { class: 'opt-label' }, el('strong', {}, o.label), el('small', {}, o.hint)),
+          el('div', { class: 'opt-range' }, slider, value)));
+        continue;
+      }
       const group = el('div', { class: 'seg', role: 'radiogroup', 'aria-label': o.label });
       for (const [value, text] of o.choices) {
         group.append(el('button', {

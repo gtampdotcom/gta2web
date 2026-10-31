@@ -102,6 +102,8 @@
     .options-screen { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
       padding: 16px; background: rgba(0, 0, 0, .72); }
     .options-screen[hidden] { display: none; }
+    .opt-range { display: flex; align-items: center; gap: .6rem; }
+    .opt-range output { min-width: 1.5em; text-align: right; }
     .options-panel { width: min(640px, 100%); }
     .options-list { margin-bottom: .8rem; }
     .options-list .opt { flex-wrap: wrap; }
@@ -550,6 +552,7 @@
           </label>
           <select id="coop-pacing" aria-label="Network">
             <option value="lockstep">Lockstep: only key presses sent (waits for the slowest player)</option>
+            <option value="clock">Match clock: your moves show at once, nobody waits (experimental)</option>
             <!-- host-paced (value "host": the game runs at the host's speed) is hidden: it gives the host the least input lag -->
             <option value="ghost">Ghost sync: only players and their vehicles sync, no contact, no combat</option>
             <option value="solid">Contact sync: only players and their vehicles sync, no combat</option>
@@ -620,6 +623,6 @@
       <label hidden>Import saves<input id="import-saves" type="file" accept="application/json,.json"></label>
     </div>
   </main>
-  <script type="module" src="shell.js"></script>
+  <script type="module" src="shell.js?v=1256913706"></script>
 </body>
 </html>

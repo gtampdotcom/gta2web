@@ -109,12 +109,25 @@ function decodePcm16(bytes, wav, firstFrame, frames) {
   return out;
 }
 
+export const EFFECTS_VOLUME_KEY = 'gta2-port-effects-volume';
+export const DEFAULT_EFFECTS_VOLUME = 5;
+
+function storedVolume(key, fallback) {
+  let v = null;
+  try { v = localStorage.getItem(key); } catch { /* storage unavailable */ }
+  return v === null || !Number.isFinite(Number(v)) ? fallback : Number(v);
+}
+
 export class Gta2Audio {
   constructor() {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     this.ctx = new Ctx();
     this.master = this.ctx.createGain();
     this.master.connect(this.ctx.destination);
+    // the Options screen's volume, 0-10 (the original kept it in the registry): everything goes through it
+    this.effects = this.ctx.createGain();
+    this.effects.connect(this.master);
+    this.setVolume('effects', storedVolume(EFFECTS_VOLUME_KEY, DEFAULT_EFFECTS_VOLUME));
     this.gameVolume = 1;
     this.userVolume = 1;
     this.muted = false;
@@ -152,6 +165,11 @@ export class Gta2Audio {
   setMasterVolume(v) {
     this.gameVolume = Math.max(0, Math.min(127, v)) / 127;
     this.applyMaster();
+  }
+
+  /** Sets 'effects' (0-10). */
+  setVolume(bus, level) {
+    this[bus].gain.setValueAtTime(Math.max(0, Math.min(10, level)) / 10, this.ctx.currentTime);
   }
 
   setUserVolume(v) {
@@ -213,9 +231,9 @@ export class Gta2Audio {
     const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
     if (panner) {
       panner.pan.value = Math.max(-1, Math.min(1, (pan - 64) / 64));
-      source.connect(gain).connect(panner).connect(this.master);
+      source.connect(gain).connect(panner).connect(this.effects);
     } else {
-      source.connect(gain).connect(this.master);
+      source.connect(gain).connect(this.effects);
     }
     source.start();
     if (loops > 1) source.stop(this.ctx.currentTime + (buffer.duration * loops) / source.playbackRate.value);
@@ -265,12 +283,12 @@ export class Gta2Audio {
       return 0;
     }
     const gain = this.ctx.createGain();
-    gain.connect(this.master);
     this.streams.set(id, {
       path, bytes, wav, gain, loops: 1, rateFactor: 1, sources: [], started: false, volume: 127,
       radio: /(^|[\\/])gtaudio[\\/]\d+a?\.wav$/i.test(path), // a radio station (data/audio/vocals is speech)
       baseMs: 0, startWall: 0, cursorFrame: 0, nextTime: 0, durationMs: (wav.frames / wav.rate) * 1000,
     });
+    gain.connect(this.effects);
     this.applyStreamGain(this.streams.get(id)); // a station opened while the radio is off starts silent
     return 1;
   }

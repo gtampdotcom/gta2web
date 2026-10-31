@@ -2,24 +2,25 @@
 // in-memory filesystem, wires input and the renderer, and starts the core.
 // No game file leaves the device (R01); nothing is fetched from the network
 // except the port itself, or local files in ?devdata=1 developer mode.
-import createGta2 from './gta2.js';
-import { SAVE_KEY, SaveStates, exportSaves, importSaves, listSaves, toast } from './savestate.js';
-import { SavesScreen, describe } from './saves.js';
-import { GhostRace } from './ghosts.js';
-import { ControlsScreen, scoreboardKey } from './controls.js';
-import { OptionsScreen } from './options.js';
-import { LANG_KEY, applyMapText, prepareGameLanguage, savedLang } from './gamelang.js';
-import { TouchControls, isTouchDevice } from './touch.js';
-import { Gta2Renderer } from './renderer.js';
-import { SaveStorage } from './storage.js';
-import { Gta2Audio } from './audio.js';
-import { GameFileCache, MapFileCache, downloadFreeware, gunzip, unpackInstallerFile } from './gamefiles.js';
-import { Gta2Map, exportDiscovery, importDiscovery } from './map.js';
-import { hideLanding, landingProgress, showContinue, showLanding, showLeaderboard } from './landing.js';
-import { count, initStats, startPlayClock } from './stats.js';
-import { CoopChat } from './chat.js';
-import { GamepadInput } from './gamepad.js';
-import { CoopLobby, DISTRICTS, GANGS, LocalTransport, MAX_PLAYERS, MODES, RoomDirectory, ServerTransport, WebRtcTransport, isGhostRace, loadMaps, roomSize } from './net.js';
+import createGta2 from './gta2.js?v=1256913706';
+import { installJournal, Rollback } from './rollback.js?v=1256913706';
+import { SAVE_KEY, SaveStates, exportSaves, importSaves, listSaves, toast } from './savestate.js?v=1256913706';
+import { SavesScreen, describe } from './saves.js?v=1256913706';
+import { GhostRace } from './ghosts.js?v=1256913706';
+import { ControlsScreen, scoreboardKey } from './controls.js?v=1256913706';
+import { OptionsScreen } from './options.js?v=1256913706';
+import { LANG_KEY, applyMapText, prepareGameLanguage, savedLang } from './gamelang.js?v=1256913706';
+import { TouchControls, isTouchDevice } from './touch.js?v=1256913706';
+import { Gta2Renderer } from './renderer.js?v=1256913706';
+import { SaveStorage } from './storage.js?v=1256913706';
+import { EFFECTS_VOLUME_KEY, Gta2Audio } from './audio.js?v=1256913706';
+import { GameFileCache, MapFileCache, downloadFreeware, gunzip, unpackInstallerFile } from './gamefiles.js?v=1256913706';
+import { Gta2Map, exportDiscovery, importDiscovery } from './map.js?v=1256913706';
+import { hideLanding, landingProgress, showContinue, showLanding, showLeaderboard } from './landing.js?v=1256913706';
+import { count, initStats, startPlayClock } from './stats.js?v=1256913706';
+import { CoopChat } from './chat.js?v=1256913706';
+import { GamepadInput } from './gamepad.js?v=1256913706';
+import { CoopLobby, DISTRICTS, GANGS, LocalTransport, MAX_PLAYERS, MODES, RoomDirectory, ServerTransport, WebRtcTransport, isGhostRace, loadMaps, roomSize } from './net.js?v=1256913706';
 
 const GAME_DIR = '/gta2';
 // Minimum set for the first district; a full profile check is T07's job.
@@ -703,7 +704,7 @@ const TAG_MINUTES = 10;
  * map for the district, and connects the core to the lobby's transport.
  */
 async function setupCoop(Module, coop) {
-  const { lobby, district, players, mySlot, delay, friendlyFire, mode = 'roam', crews = [] } = coop;
+  const { lobby, district, players, mySlot, delay, friendlyFire, mode = 'roam', crews = [], clock = false, predict = false } = coop;
   const d = DISTRICTS[district];
   if (d.dir) await writeMapFiles(Module, d);
   // the map's own car handling (its mmp's GCIFile, a GTA2 11.44 feature): 10.5 loads data/nyc.gci,
@@ -716,7 +717,14 @@ async function setupCoop(Module, coop) {
   const seats = ghost ? [players[mySlot]] : players;
   // lockstep, or host-paced (the host's choice; net_web.cpp): before the session is set up
   if (Module._gta2_port_net_set_pacing) Module.ccall('gta2_port_net_set_pacing', null, ['number'], [coop.pacing === 'host' ? 1 : 0]);
-  Module.ccall('gta2_port_net_configure', null, ['number', 'number', 'number'], [seats.length, ghost ? 0 : mySlot, ghost ? 0 : delay]);
+  Module.ccall('gta2_port_net_configure', null, ['number', 'number', 'number', 'number'], [seats.length, ghost ? 0 : mySlot, ghost ? 0 : delay, clock ? 1 : 0]);
+  // Prediction (web/rollback.js): this player's inputs show at once; the page runs the ticks.
+  const rollback = clock && predict
+    ? new Rollback(Module, Module.gta2Journal, { players: players.length, mySlot, send: (bytes) => lobby.sendGame(-1, bytes) })
+    : null;
+  Module.ccall('gta2_port_net_rollback', null, ['number'], [rollback ? 1 : 0]);
+  Module.gta2Rollback = rollback;
+  coop.rollback = rollback;
   // the mode's rules: free-for-all is the original frag game; Gang Wars and free roam a points game
   // (Gang Wars scored per crew by the shell); friendly fire everywhere in free-for-all, by crew in Gang Wars
   // everyone against everyone (frag, points and tag games): friendly fire on, no riding together
@@ -752,7 +760,20 @@ async function setupCoop(Module, coop) {
     coop.ghosts = new GhostRace({ Module, lobby, audio: window.gta2 && window.gta2.audio, bank, solid: coop.pacing === 'solid' });
     lobby.onPlayerLeft = (slot) => coop.ghosts.remove(slot);
   } else {
-    lobby.onPlayerLeft = (slot) => Module.ccall('gta2_port_net_peer_left', null, ['number'], [slot]);
+    // With the match clock (web/clock.js) every tick's inputs come in its bundles, and only the
+    // clock drops a player; without it each game gives up on a player whose connection closed.
+    const bundle = Module.cwrap('gta2_port_net_bundle', null, ['number', 'number']);
+    lobby.onBundle = rollback ? (bytes) => rollback.receive(bytes) : (bytes) => {
+      const ptr = Module._malloc(bytes.length);
+      Module.HEAPU8.set(bytes, ptr);
+      bundle(ptr, bytes.length);
+      Module._free(ptr);
+    };
+    lobby.onPlayerLeft = (slot) => { if (!clock) Module.ccall('gta2_port_net_peer_left', null, ['number'], [slot]); };
+    lobby.onClockLost = () => {
+      setStatus('The host left, so the match is over.', true);
+      setTimeout(() => Module.onGameExit && Module.onGameExit(0), 5000);
+    };
   }
   lobby.gameReady();
   watchCoop(Module, coop);
@@ -799,7 +820,7 @@ function watchCoop(Module, coop) {
     for (let i = 0; i < 1024; i++) {
       const tick = v[i * 9];
       if (tick > 0 && tick % EVERY === 0 && !mine.has(tick)) {
-        mine.set(tick, [1, 3, 4, 5, 6].map((k) => v[i * 9 + k]).join(':'));
+        mine.set(tick, [1, 3, 4, 5, 6, 7, 8].map((k) => v[i * 9 + k]).join(':')); // RNG, peds, cars, objects, players
       }
     }
   };
@@ -818,6 +839,8 @@ function watchCoop(Module, coop) {
     compare(tick);
   };
   let held = { frame: -1, since: 0 };
+  const lag = { late: [], at: -Infinity };
+  lobby.onLag = (late) => { lag.late = late; lag.at = performance.now(); };
   setInterval(() => {
     if (!ghost) checksumRows();
     for (const tick of [...mine.keys()].filter((t) => t > lastSent).sort((a, b) => a - b)) {
@@ -831,8 +854,10 @@ function watchCoop(Module, coop) {
     const v = Module.HEAP32.subarray(p >> 2, (p >> 2) + 10);
     const now = performance.now();
     if (v[4] !== held.frame) held = { frame: v[4], since: now };
-    const waiting = v[3] && now - held.since > 500
-      ? players.map((_, slot) => slot).filter((slot) => slot !== mySlot && (v[6] & (1 << slot))) : [];
+    const stalled = v[3] && now - held.since > 500;
+    const waiting = stalled && !coop.clock ? players.map((_, slot) => slot).filter((slot) => slot !== mySlot && (v[6] & (1 << slot))) : [];
+    // the clock's word on who it had to make up inputs for (a fifth or more of the last 2 s)
+    const lagging = now - lag.at < 3000 ? lag.late.map((n, slot) => (n >= 12 ? slot : -1)).filter((slot) => slot >= 0) : [];
     if (coop.results) coop.results(); // keeps the latest standings for the end-of-match results
     // Gang Wars: a crew reaching the points target wins (time limits and free-for-all end in the game)
     if (!won && coop.mode === 'wars' && coop.pointsTarget > 0 && coop.results) {
@@ -846,6 +871,8 @@ function watchCoop(Module, coop) {
     if (won) text = `${won} win the Gang War!`;
     else if (desync) text = `The games have drifted apart (tick ${desync.tick}, with ${name(desync.slot)}): what you see may no longer match. Start a new match to fix it.`;
     else if (waiting.length) text = `Waiting for ${waiting.map(name).join(', ')}…`;
+    else if (stalled && coop.clock) text = 'Waiting for the connection to the game…';
+    else if (lagging.length) text = `Connection lagging: ${lagging.map(name).join(', ')}`;
     banner.textContent = text;
     banner.hidden = !text;
     banner.classList.toggle('error', !!desync);
@@ -868,6 +895,11 @@ function coopView(Module, coop) {
   const waypoints = new Map(); // slot -> {x, y}
   lobby.onWaypoint = (slot, wp) => { if (wp) waypoints.set(slot, wp); else waypoints.delete(slot); };
   const read = Module.cwrap('gta2_port_coop_players', 'number', []);
+  // With prediction (web/rollback.js) the game's memory holds guessed ticks between the page's
+  // steps: the map and radar show those (this player's moves at once), the standings the last
+  // confirmed tick, which every game agrees on.
+  let confirmed = null;
+  if (coop.rollback) coop.rollback.onConfirmed = () => { const p = read(); confirmed = Module.HEAP32.slice(p >> 2, (p >> 2) + 6 * 14); };
   const crewOf = (slot) => (mode === 'wars' ? crews.findIndex((c) => c.members.includes(players[slot].id)) : -1);
   const colour = (slot) => {
     const c = crewOf(slot);
@@ -884,9 +916,12 @@ function coopView(Module, coop) {
       return list[slot] ? list[slot].name : `Player ${slot + 1}`;
     },
     /** Every player in the match: position (blocks), heading, health, stats, crew. */
-    players() {
-      const p = read();
-      const v = Module.HEAP32.subarray(p >> 2, (p >> 2) + 6 * 14);
+    players(fromConfirmed = false) {
+      let v = fromConfirmed && confirmed;
+      if (!v) {
+        const p = read();
+        v = Module.HEAP32.subarray(p >> 2, (p >> 2) + 6 * 14);
+      }
       if (ghost) {
         // this player from their own game (slot 0 there), everyone else from their ghosts
         const mine = {
@@ -964,7 +999,7 @@ function coopView(Module, coop) {
     },
     /** Gang Wars result for the server (saved crews): every crew, its members' stats, who won. */
     report() {
-      const ps = view.players().filter((p) => p.inGame);
+      const ps = view.players(true).filter((p) => p.inGame);
       const sums = crews.map((c, i) => ({ c, members: ps.filter((p) => p.crew === i) }))
         .map((t) => ({ ...t, points: t.members.reduce((n, p) => n + p.points, 0) }));
       const best = Math.max(0, ...sums.map((t) => t.points));
@@ -1000,6 +1035,7 @@ async function start(getFiles, { cacheAfterStart = false, coop = null, loadSlot 
       onAbort: (what) => recordError(what),
       onGameExit: (code) => {
         if (coop) {
+          coop.lobby.leaveMatch();
           // back to the same room, as host again or rejoining (wireCoopLobby picks this up)
           try {
             sessionStorage.setItem('gta2-coop-rematch', JSON.stringify({ code: coop.lobby.code, host: coop.lobby.host, settings: coop.lobby.settings }));
@@ -1023,6 +1059,9 @@ async function start(getFiles, { cacheAfterStart = false, coop = null, loadSlot 
         setStatus(`The game exited (code ${code}). Reload the page to play again.`);
       },
     });
+    // co-op prediction (web/rollback.js): what the page changes in the game's memory between its
+    // ticks is recorded, before anything holds the exports that do it
+    Module.gta2Journal = installJournal(Module);
     renderer.module = Module;
     storage.module = Module;
     audio.module = Module;
@@ -1084,12 +1123,12 @@ async function start(getFiles, { cacheAfterStart = false, coop = null, loadSlot 
     // Map screen (M), minimap and waypoint: not in the original game (T33).
     const releaseAll = Module.cwrap('gta2_port_release_all_keys', null, []);
     // The map screen and the Saves screen pause the game and its sound.
-    const pauseGame = (paused) => {
+    const pauseGame = (paused, keepSound = false) => {
       gamePaused = paused;
       releaseAll();
       // in co-op the shared game keeps running behind the map (everyone else would wait)
       if (!coop) Module.ccall('gta2_port_set_paused', null, ['number'], [paused ? 1 : 0]);
-      if (audio.ctx) { if (paused) audio.ctx.suspend().catch(() => {}); else audio.resume(); }
+      if (audio.ctx) { if (paused && !keepSound) audio.ctx.suspend().catch(() => {}); else audio.resume(); }
     };
     const map = new Gta2Map({ Module, renderer, gameCanvas: canvas, onPause: pauseGame });
     window.gta2.map = map;
@@ -1135,7 +1174,7 @@ async function start(getFiles, { cacheAfterStart = false, coop = null, loadSlot 
     $('controls-open').addEventListener('click', () => controls.show());
     // Options: the settings without a toolbar button, applied at once (the language from the next game)
     const options = new OptionsScreen({
-      pause: pauseGame,
+      pause: (paused) => pauseGame(paused, true), // the sound keeps playing, to hear the volume sliders
       onClose: () => canvas.focus(),
       onChange: (key, value) => {
         if (key === 'gta2-port-aspect') {
@@ -1145,6 +1184,8 @@ async function start(getFiles, { cacheAfterStart = false, coop = null, loadSlot 
           Module.ccall('gta2_port_set_hud_edges', null, ['number'], [value === 'centre' ? 0 : 1]);
         } else if (key === 'gta2-port-smooth') {
           Module.ccall('gta2_port_set_interpolation', null, ['number'], [value === '0' ? 0 : 1]);
+        } else if (key === EFFECTS_VOLUME_KEY) {
+          audio.setVolume('effects', Number(value));
         } else if (key === LANG_KEY) {
           toast('The game language changes from the next game.');
         }
